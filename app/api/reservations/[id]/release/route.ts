@@ -3,10 +3,10 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { id } = params;
+        const { id } = await context.params;
 
         const result = await prisma.$transaction(async (tx) => {
             const reservation = await tx.reservation.findUnique({
@@ -28,25 +28,44 @@ export async function POST(
                         warehouseId: reservation.warehouseId,
                     },
                 },
-                data: { reservedUnits: { decrement: reservation.quantity } },
+                data: {
+                    reservedUnits: {
+                        decrement: reservation.quantity,
+                    },
+                },
             });
 
             return tx.reservation.update({
                 where: { id },
                 data: { status: "RELEASED" },
-                include: { product: true, warehouse: true },
+                include: {
+                    product: true,
+                    warehouse: true,
+                },
             });
         });
 
         return NextResponse.json(result);
     } catch (error: any) {
         if (error.message === "NOT_FOUND") {
-            return NextResponse.json({ error: "Reservation not found" }, { status: 404 });
+            return NextResponse.json(
+                { error: "Reservation not found" },
+                { status: 404 }
+            );
         }
+
         if (error.message === "NOT_PENDING") {
-            return NextResponse.json({ error: "Reservation is not pending" }, { status: 400 });
+            return NextResponse.json(
+                { error: "Reservation is not pending" },
+                { status: 400 }
+            );
         }
+
         console.error(error);
-        return NextResponse.json({ error: "Failed to release reservation" }, { status: 500 });
+
+        return NextResponse.json(
+            { error: "Failed to release reservation" },
+            { status: 500 }
+        );
     }
 }

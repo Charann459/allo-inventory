@@ -1,168 +1,231 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
+import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
-type InventoryItem = {
-  warehouseId: string;
-  warehouseName: string;
-  location: string;
-  totalUnits: number;
-  reservedUnits: number;
-  availableUnits: number;
-};
-
-type Product = {
+type Reservation = {
   id: string;
-  name: string;
-  sku: string;
-  description: string;
-  price: number;
-  inventory: InventoryItem[];
+  quantity: number;
+  status: "PENDING" | "CONFIRMED" | "RELEASED";
+  expiresAt: string;
+
+  product: {
+    name: string;
+    price: number;
+    sku: string;
+  };
+
+  warehouse: {
+    name: string;
+    location: string;
+  };
 };
 
-export default function HomePage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reserving, setReserving] = useState<string | null>(null);
+export default function ReservationPage() {
+  const params = useParams();
   const router = useRouter();
 
-  const fetchProducts = async () => {
+  const [reservation, setReservation] = useState<Reservation | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(false);
+  const [timeLeft, setTimeLeft] = useState("");
+
+  const reservationId = params.id as string;
+
+  const fetchReservation = async () => {
     try {
-      const res = await fetch("/api/products");
+      const res = await fetch(`/api/reservations/${reservationId}`);
+
+      if (!res.ok) {
+        throw new Error();
+      }
+
       const data = await res.json();
-      setProducts(data);
+      setReservation(data);
     } catch {
-      toast.error("Failed to load products");
+      toast.error("Failed to load reservation");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchProducts();
+    fetchReservation();
   }, []);
 
-  const handleReserve = async (productId: string, warehouseId: string) => {
-    const key = `${productId}-${warehouseId}`;
-    setReserving(key);
+  useEffect(() => {
+    if (!reservation) return;
+
+    const interval = setInterval(() => {
+      const expiry = new Date(reservation.expiresAt).getTime();
+      const now = Date.now();
+
+      const diff = expiry - now;
+
+      if (diff <= 0) {
+        setTimeLeft("Expired");
+        clearInterval(interval);
+        return;
+      }
+
+      const minutes = Math.floor(diff / 1000 / 60);
+      const seconds = Math.floor((diff / 1000) % 60);
+
+      setTimeLeft(
+        `${minutes}:${seconds.toString().padStart(2, "0")}`
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [reservation]);
+
+  const handleConfirm = async () => {
+    setProcessing(true);
+
     try {
-      const res = await fetch("/api/reservations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId, warehouseId, quantity: 1 }),
-      });
+      const res = await fetch(
+        `/api/reservations/${reservationId}/confirm`,
+        {
+          method: "POST",
+        }
+      );
 
       const data = await res.json();
 
-      if (res.status === 409) {
-        toast.error("Not enough stock available for this item.");
+      if (res.status === 410) {
+        toast.error("Reservation expired");
         return;
       }
 
       if (!res.ok) {
-        toast.error(data.error || "Failed to reserve item.");
+        toast.error(data.error || "Failed to confirm");
         return;
       }
 
-      toast.success("Reserved! Redirecting to checkout...");
-      router.push(`/reservation/${data.id}`);
+      toast.success("Purchase confirmed");
+      setReservation(data);
     } catch {
-      toast.error("Something went wrong.");
+      toast.error("Something went wrong");
     } finally {
-      setReserving(null);
+      setProcessing(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    setProcessing(true);
+
+    try {
+      const res = await fetch(
+        `/api/reservations/${reservationId}/release`,
+        {
+          method: "POST",
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || "Failed to cancel");
+        return;
+      }
+
+      toast.success("Reservation cancelled");
+      setReservation(data);
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setProcessing(false);
     }
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-500">Loading products...</p>
-        </div>
+        Loading reservation...
+      </div>
+    );
+  }
+
+  if (!reservation) {
+    return (
+      <div className="text-center py-10">
+        Reservation not found
       </div>
     );
   }
 
   return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Products</h1>
-        <p className="text-gray-500 mt-1">
-          Reserve items from your preferred warehouse
-        </p>
-      </div>
+    <div className="max-w-2xl mx-auto">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>Reservation Details</CardTitle>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {products.map((product) => (
-          <Card key={product.id} className="hover:shadow-lg transition-shadow">
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="text-lg">{product.name}</CardTitle>
-                  <p className="text-sm text-gray-500 mt-1">{product.description}</p>
-                </div>
-                <Badge variant="secondary" className="ml-2 shrink-0">
-                  {product.sku}
-                </Badge>
-              </div>
-              <p className="text-2xl font-bold text-blue-600">
-                ₹{product.price.toLocaleString()}
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-gray-700">
-                  Available at warehouses:
-                </p>
-                {product.inventory.map((inv) => (
-                  <div
-                    key={inv.warehouseId}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                  >
-                    <div>
-                      <p className="text-sm font-medium">{inv.warehouseName}</p>
-                      <p className="text-xs text-gray-500">{inv.location}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <Badge
-                          variant={inv.availableUnits > 0 ? "default" : "destructive"}
-                          className="text-xs"
-                        >
-                          {inv.availableUnits} available
-                        </Badge>
-                        {inv.reservedUnits > 0 && (
-                          <Badge variant="outline" className="text-xs">
-                            {inv.reservedUnits} reserved
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      disabled={
-                        inv.availableUnits === 0 ||
-                        reserving === `${product.id}-${inv.warehouseId}`
-                      }
-                      onClick={() => handleReserve(product.id, inv.warehouseId)}
-                    >
-                      {reserving === `${product.id}-${inv.warehouseId}`
-                        ? "Reserving..."
-                        : inv.availableUnits === 0
-                          ? "Out of Stock"
-                          : "Reserve"}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            <Badge>
+              {reservation.status}
+            </Badge>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-6">
+          <div>
+            <p className="text-sm text-gray-500">Product</p>
+            <h2 className="text-xl font-semibold">
+              {reservation.product.name}
+            </h2>
+          </div>
+
+          <div>
+            <p className="text-sm text-gray-500">Warehouse</p>
+            <h3 className="font-medium">
+              {reservation.warehouse.name}
+            </h3>
+            <p className="text-gray-500">
+              {reservation.warehouse.location}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-sm text-gray-500">
+              Reservation expires in
+            </p>
+
+            <p className="text-2xl font-bold">
+              {timeLeft}
+            </p>
+          </div>
+
+          {reservation.status === "PENDING" && (
+            <div className="flex gap-3">
+              <Button
+                onClick={handleConfirm}
+                disabled={processing}
+              >
+                Confirm Purchase
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={handleCancel}
+                disabled={processing}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+
+          <Button
+            variant="secondary"
+            onClick={() => router.push("/")}
+          >
+            Back to Products
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
